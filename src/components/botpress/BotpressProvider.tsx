@@ -1,4 +1,5 @@
 import { createContext, useState, useEffect, useCallback, type ReactNode } from 'react';
+import { useNavigate } from 'react-router-dom';
 import type { BookVaultEvent } from '../../types/events';
 import { fireCustomEvent } from './EventDispatcher';
 
@@ -26,87 +27,73 @@ interface BotpressProviderProps {
 type BotpressState = 'init' | 'ready' | 'error';
 
 /**
- * Context provider that wraps Botpress webchat initialization.
+ * Context provider that wraps Botpress webchat.
  *
- * - Waits for window.botpressWebChat to be available.
- * - Initializes with the configured client ID.
- * - Falls back gracefully (error state) if the CDN is down or client ID missing.
+ * - The Studio embed script in index.html handles initialization.
+ * - This provider detects readiness and wires up navigation events.
+ * - Falls back gracefully (error state) if the CDN fails to load.
  */
 export function BotpressProvider({ children }: BotpressProviderProps) {
   const [state, setState] = useState<BotpressState>('init');
+  const navigate = useNavigate();
 
+  // -------------------------------------------------------------------------
+  // Detect webchat readiness (embed script initializes it)
+  // -------------------------------------------------------------------------
   useEffect(() => {
-    const clientId = import.meta.env.VITE_BOTPRESS_CLIENT_ID;
-
-    if (!clientId) {
-      console.warn(
-        '[BotpressProvider] VITE_BOTPRESS_CLIENT_ID is not set. ' +
-          'Botpress webchat will not initialize.',
-      );
-      setState('error');
-      return;
-    }
-
-    // Fire a page-view event when the app mounts
-    fireCustomEvent('bookvault:page-view', { page: 'app' });
-
     let cancelled = false;
     let attempts = 0;
-    const maxAttempts = 20; // ~5 seconds polling
+    const maxAttempts = 20;
 
     const poll = () => {
       if (cancelled) return;
       attempts++;
 
-      const bp = window.botpressWebChat;
-      if (bp) {
-        try {
-          bp.init({
-            botId: clientId,
-            configuration: {
-              color: '#3276EA',
-              variant: 'solid',
-              themeMode: 'light',
-              botName: 'BookVault Assistant',
-              botDescription: 'Ask me about any book!',
-              composerPlaceholder: 'Ask about books...',
-              proactiveMessageEnabled: true,
-              proactiveBubbleMessage: 'Need book recommendations?',
-              proactiveBubbleTriggerType: 'afterDelay',
-              proactiveBubbleDelayTime: 3,
-            },
-            clientId,
-          });
-
-          if (!cancelled) setState('ready');
-        } catch {
-          if (!cancelled) {
-            console.warn('[BotpressProvider] Failed to initialize webchat');
-            setState('error');
-          }
-        }
+      if (window.botpress) {
+        if (!cancelled) setState('ready');
         return;
       }
 
       if (attempts < maxAttempts) {
         setTimeout(poll, 250);
       } else {
-        if (!cancelled) {
-          console.warn(
-            '[BotpressProvider] Botpress webchat script not loaded after polling. ' +
-              'Ensure the CDN script is included in index.html.',
-          );
-          setState('error');
-        }
+        if (!cancelled) setState('error');
       }
     };
 
     poll();
-
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, []);
+
+  // -------------------------------------------------------------------------
+  // Listen for custom events FROM the bot → app navigation
+  // -------------------------------------------------------------------------
+  useEffect(() => {
+    if (state !== 'ready') return;
+
+    const bp = window.botpress;
+    if (!bp) return;
+
+    const handler = (event: { type: string; payload?: { id?: string } }) => {
+      if (event.type === 'bookvault:navigate-to-book' && event.payload?.id) {
+        navigate(`/books/${event.payload.id}`);
+      }
+    };
+
+    bp.on('customEvent', handler);
+    return () => {
+      bp.off?.('customEvent', handler);
+    };
+  }, [state, navigate]);
+
+  // -------------------------------------------------------------------------
+  // Fire page-view event when webchat is ready
+  // -------------------------------------------------------------------------
+  useEffect(() => {
+    if (state === 'ready') {
+      fireCustomEvent('bookvault:page-view', { page: 'app' });
+    }
+  }, [state]);
 
   const sendEvent = useCallback(
     (event: BookVaultEvent) => {
@@ -116,7 +103,7 @@ export function BotpressProvider({ children }: BotpressProviderProps) {
   );
 
   const openChat = useCallback(() => {
-    const bp = window.botpressWebChat;
+    const bp = window.botpress;
     if (bp) {
       try {
         bp.open();
