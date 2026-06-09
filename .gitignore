@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Environment — contains API keys (VITE_BIGBOOK_API_KEY, VITE_BOTPRESS_CLIENT_ID)
+.env
+.env.*.local
+
+# TypeScript incremental build info
+*.tsbuildinfo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs
+*.log

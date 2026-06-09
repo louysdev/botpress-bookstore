@@ -1,0 +1,52 @@
+# openspec/config.yaml
+schema: spec-driven
+
+context: |
+  A book catalog web app (React SPA) using React 18+, Vite, pnpm, Radix UI
+  (themes + components), Big Book API for book data, and Botpress chatbot
+  embed.
+
+  Stack:
+  - Runtime: Node.js v26.0.0, pnpm 11.5.2
+  - Frontend: React 18+, Vite, Radix UI
+  - API: Big Book API (external, REST)
+  - Chat: Botpress embed
+  - Language: JavaScript (no TypeScript configured yet)
+  - Package manager: pnpm
+
+testing:
+  strict_tdd: false
+  test_runner: null
+  layers:
+    unit: false
+    integration: false
+    e2e: false
+  coverage: false
+  quality:
+    linter: null
+    type_checker: null
+    formatter: null
+
+rules:
+  proposal:
+    - Include external API integration considerations
+    - Document fallback behavior for API failures
+  specs:
+    - Use Given/When/Then for scenarios
+    - Use RFC 2119 keywords (MUST, SHALL, SHOULD, MAY)
+  design:
+    - Include component tree for UI changes
+    - Document data flow between Big Book API / React state / Botpress
+  tasks:
+    - Group by phase, use hierarchical numbering
+    - Keep tasks completable in one session
+  apply:
+    - Follow existing code patterns
+    tdd: false
+    test_command: ""
+  verify:
+    test_command: ""
+    build_command: ""
+    coverage_threshold: 0
+  archive:
+    - Warn before merging destructive deltas

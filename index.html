@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>BookVault</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+
+    <!-- Botpress Webchat v3 — enabled via VITE_BOTPRESS_CLIENT_ID -->
+    <script src="https://cdn.botpress.cloud/webchat/v3.3/inject.js"></script>
+    <!--
+    Deferred configuration (fallback if BotpressProvider fails to init):
+    <script>
+      window.botpressWebChat.init({
+        clientId: import.meta.env.VITE_BOTPRESS_CLIENT_ID,
+        containerWidth: '100%',
+        containerHeight: '100%',
+      });
+    </script>
+    -->
+  </body>
+</html>
