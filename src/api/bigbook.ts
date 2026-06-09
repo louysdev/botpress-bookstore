@@ -5,102 +5,59 @@ import { MemoryCache } from '../utils/cache';
 import { TokenBucket } from '../utils/throttle';
 
 // ---------------------------------------------------------------------------
-// Raw Big Book API response shapes (REAL shapes from the live API)
+// Raw OpenLibrary API response shapes
 // ---------------------------------------------------------------------------
 
-interface RawAuthor {
-  id: number;
-  name: string;
-}
-
-interface RawRating {
-  average: number;
-}
-
-/**
- * Each book in the search results array is itself wrapped in an array:
- * "books": [[{...}], [{...}], ...]
- */
-interface RawSearchBook {
-  id: number;
+interface RawSearchDoc {
+  key: string;
   title: string;
-  subtitle?: string;
-  image?: string;
-  authors?: RawAuthor[];
-  rating?: RawRating;
-  genres?: string[];
-  description?: string;
-  year?: number;
-  pages?: number;
+  author_name?: string[];
+  cover_i?: number;
+  first_publish_year?: number;
+  subject?: string[];
+  ratings_average?: number;
+  number_of_pages_median?: number;
 }
 
 interface RawSearchResponse {
-  available: number;
-  number: number;
-  offset: number;
-  books: RawSearchBook[][];  // array of arrays!
+  numFound: number;
+  start: number;
+  docs: RawSearchDoc[];
 }
 
-interface RawBookDetail {
-  id: number;
+interface RawWorkDetail {
+  description?: string | { type: string; value: string };
   title: string;
-  image?: string;
-  authors?: RawAuthor[];
-  identifiers?: {
-    open_library_id?: string;
-    isbn_10?: string;
-    isbn_13?: string;
-  };
-  description?: string;
-  rating?: RawRating;
-  publish_date?: number;  // year as a number (e.g. 1997.0)
-  number_of_pages?: number;
-  genres?: string[];
+  covers?: number[];
+  subjects?: string[];
+  first_publish_date?: string;
+  authors?: Array<{
+    author: { key: string };
+    type: { key: string };
+  }>;
 }
 
-/**
- * Similar books response uses "similar_books" (not "books")
- */
-interface RawSimilarBook {
-  id: number;
-  title: string;
-  subtitle?: string;
-  image?: string;
+interface RawAuthorDoc {
+  key: string;
+  name: string;
 }
 
-interface RawSimilarResponse {
-  similar_books: RawSimilarBook[];
+interface RawAuthorSearchResponse {
+  numFound: number;
+  docs: RawAuthorDoc[];
 }
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-const BASE_URL = 'https://api.bigbookapi.com';
-
-import type { InternalAxiosRequestConfig } from 'axios';
-
-function buildApiKeyInterceptor() {
-  return (config: InternalAxiosRequestConfig) => {
-    const key = import.meta.env.VITE_BIGBOOK_API_KEY;
-    if (!key) {
-      console.warn('[BigBook API] VITE_BIGBOOK_API_KEY is not set — requests will fail');
-      return config;
-    }
-    return {
-      ...config,
-      params: { ...config.params, 'api-key': key },
-    };
-  };
-}
+const BASE_URL = 'https://openlibrary.org';
 
 const apiClient = axios.create({ baseURL: BASE_URL });
-apiClient.interceptors.request.use(buildApiKeyInterceptor());
 
-/** Shared cache + throttle instances */
+/** Shared cache + throttle instances (5 req/s for OpenLibrary) */
 const cache = new MemoryCache<unknown>();
-const throttle = new TokenBucket(1, 1000);
+const throttle = new TokenBucket(5, 1000);
 
-// Exported for test isolation
 export function clearCache(): void {
   cache.clear();
 }
@@ -109,74 +66,86 @@ export function clearCache(): void {
 // Mapping helpers
 // ---------------------------------------------------------------------------
 
-/** Extract author name from authors array, or return a default. */
-function extractAuthorName(authors?: RawAuthor[]): string {
-  if (!authors || authors.length === 0) return 'Unknown Author';
-  return authors.map((a) => a.name).join(', ');
+function extractId(key: string): string {
+  return key.replace('/works/', '');
 }
 
-/** Extract rating average from rating object. */
-function extractRating(rating?: RawRating): number | undefined {
-  if (!rating || typeof rating.average !== 'number') return undefined;
-  return Math.round(rating.average * 100) / 100;
+function extractAuthorName(authorName?: string[]): string {
+  if (!authorName || authorName.length === 0) return 'Unknown Author';
+  return authorName.join(', ');
 }
 
-/** Normalize image URL (some are protocol-relative). */
-function normalizeImage(image?: string): string | undefined {
-  if (!image) return undefined;
-  return image.startsWith('http') ? image : `https:${image}`;
+/** Filter out internal subjects (series:..., ... in fiction) and take first 5 */
+function extractGenres(subjects?: string[]): string[] {
+  if (!subjects || subjects.length === 0) return [];
+  return subjects
+    .filter((s) => !s.startsWith('series:') && !s.endsWith(' in fiction'))
+    .slice(0, 5);
 }
 
-/**
- * Map a search result book (unwrapped from its enclosing array).
- */
-function mapRawBook(raw: RawSearchBook): Book {
+function buildCoverUrl(coverId?: number): string | undefined {
+  if (!coverId) return undefined;
+  return `https://covers.openlibrary.org/b/id/${coverId}-M.jpg`;
+}
+
+function extractRating(rating?: number): number | undefined {
+  if (typeof rating !== 'number') return undefined;
+  return Math.round(rating * 100) / 100;
+}
+
+function extractDescription(
+  desc?: string | { type: string; value: string },
+): string | undefined {
+  if (!desc) return undefined;
+  if (typeof desc === 'string') return desc;
+  if (typeof desc.value === 'string') return desc.value;
+  return undefined;
+}
+
+function parseYear(dateStr?: string): number | undefined {
+  if (!dateStr) return undefined;
+  const match = dateStr.match(/\b(\d{4})\b/);
+  return match ? Number(match[1]) : undefined;
+}
+
+/** Map a search result doc to a Book. */
+function mapRawSearchBook(raw: RawSearchDoc): Book {
   return {
-    id: String(raw.id),
+    id: extractId(raw.key),
     title: raw.title,
-    author: extractAuthorName(raw.authors),
-    image: normalizeImage(raw.image),
-    rating: extractRating(raw.rating),
-    genres: Array.isArray(raw.genres) ? raw.genres : [],
-    description: raw.description,
-    year: raw.year ?? undefined,
-    pages: raw.pages ?? undefined,
+    author: extractAuthorName(raw.author_name),
+    image: buildCoverUrl(raw.cover_i),
+    rating: extractRating(raw.ratings_average),
+    genres: extractGenres(raw.subject),
+    year: raw.first_publish_year ?? undefined,
+    pages: raw.number_of_pages_median ?? undefined,
     isFallback: false,
   };
 }
 
-/**
- * Map a book detail response.
- */
-function mapDetail(raw: RawBookDetail): BookDetail {
+/** Map a work detail response to a BookDetail (author resolved by caller). */
+function mapRawDetail(raw: RawWorkDetail, id: string): BookDetail {
   return {
-    id: String(raw.id),
+    id,
     title: raw.title,
-    author: extractAuthorName(raw.authors),
-    image: normalizeImage(raw.image),
-    rating: extractRating(raw.rating),
-    genres: Array.isArray(raw.genres) ? raw.genres : [],
-    description: raw.description || undefined,
-    year: typeof raw.publish_date === 'number' ? Math.floor(raw.publish_date) : undefined,
-    pages: raw.number_of_pages ?? undefined,
+    author: 'Unknown Author', // resolved by caller via author API
+    image:
+      raw.covers && raw.covers.length > 0
+        ? buildCoverUrl(raw.covers[0])
+        : undefined,
+    rating: undefined,
+    genres: extractGenres(raw.subjects),
+    description: extractDescription(raw.description),
+    year: parseYear(raw.first_publish_date),
+    pages: undefined,
     isFallback: false,
     similar: [],
   };
 }
 
-/**
- * Map a similar book result (simpler shape, may lack authors/rating).
- */
-function mapRawSimilar(raw: RawSimilarBook): Book {
-  return {
-    id: String(raw.id),
-    title: raw.title,
-    author: 'Unknown Author',
-    image: normalizeImage(raw.image),
-    genres: [],
-    isFallback: false,
-  };
-}
+// ---------------------------------------------------------------------------
+// Fallback constructors
+// ---------------------------------------------------------------------------
 
 function makeFallbackBook(id: string): Book {
   return {
@@ -192,24 +161,20 @@ function makeFallbackBook(id: string): Book {
 function makeFallbackDetail(id: string): BookDetail {
   return {
     ...makeFallbackBook(id),
-    description: 'This book\'s details are temporarily unavailable.',
+    description: "This book's details are temporarily unavailable.",
     similar: [],
     isFallback: true,
   };
 }
 
-/** Generate fallback paginated response for 429/5xx */
 function makeFallbackSearchResponse(): PaginatedResponse<Book> {
-  return {
-    data: [],
-    total: 0,
-    page: 1,
-  };
+  return { data: [], total: 0, page: 1 };
 }
 
 // ---------------------------------------------------------------------------
 // Cache key helpers
 // ---------------------------------------------------------------------------
+
 function searchCacheKey(params: SearchParams): string {
   return `search:${params.query ?? ''}|${params.genre ?? ''}|${params.page ?? 1}`;
 }
@@ -225,6 +190,7 @@ function similarCacheKey(id: string): string {
 // ---------------------------------------------------------------------------
 // Request wrapper with throttle + cache + fallback
 // ---------------------------------------------------------------------------
+
 async function throttledRequest<T>(
   cacheKey: string,
   fetcher: () => Promise<T>,
@@ -238,7 +204,7 @@ async function throttledRequest<T>(
   try {
     await throttle.acquire();
   } catch {
-    console.warn('[BigBook API] Rate limiter error, using fallback');
+    console.warn('[OpenLibrary] Rate limiter error, using fallback');
     const fb = fallback();
     cache.set(cacheKey, fb);
     return fb;
@@ -254,22 +220,28 @@ async function throttledRequest<T>(
     if (axiosErr.response) {
       const status = axiosErr.response.status;
       if (status === 429 || status >= 500) {
-        console.warn(`[BigBook API] ${status} error — returning fallback`);
+        console.warn(`[OpenLibrary] ${status} error — returning fallback`);
         const fb = fallback();
         cache.set(cacheKey, fb);
         return fb;
       }
     }
 
-    // Network error, missing key, etc.
-    if (!import.meta.env.VITE_BIGBOOK_API_KEY) {
-      console.warn('[BigBook API] No API key configured — returning fallback');
-    } else {
-      console.warn('[BigBook API] Request failed — returning fallback', err);
-    }
+    console.warn('[OpenLibrary] Request failed — returning fallback', err);
     const fb = fallback();
     cache.set(cacheKey, fb);
     return fb;
+  }
+}
+
+/** Resolve author name from an OpenLibrary author key (e.g. "/authors/OL33421A"). */
+async function resolveAuthorName(authorKey: string): Promise<string> {
+  try {
+    const id = authorKey.replace('/authors/', '');
+    const resp = await apiClient.get(`/authors/${id}.json`);
+    return resp.data.name || 'Unknown Author';
+  } catch {
+    return 'Unknown Author';
   }
 }
 
@@ -279,43 +251,46 @@ async function throttledRequest<T>(
 
 /**
  * Search books by query text and/or genre.
+ * Uses `q` for text search, `subject` for genre filtering.
  */
 export async function searchBooks(
   params: SearchParams,
 ): Promise<PaginatedResponse<Book>> {
   const key = searchCacheKey(params);
   const page = params.page ?? 1;
-  const offset = (page - 1) * 12;
 
   return throttledRequest(
     key,
     async () => {
-      const response = await apiClient.get<RawSearchResponse>('/search-books', {
-        params: {
-          query: params.query || undefined,
-          genres: params.genre || undefined,
-          offset,
-          number: 12,
-        },
+      const queryParams: Record<string, string | number> = {
+        page,
+        limit: 12,
+        fields:
+          'key,title,author_name,cover_i,first_publish_year,subject,ratings_average,number_of_pages_median',
+      };
+
+      if (params.query) queryParams['q'] = params.query;
+      if (params.genre) queryParams['subject'] = params.genre;
+
+      const response = await apiClient.get<RawSearchResponse>('/search.json', {
+        params: queryParams,
       });
 
       const raw = response.data;
-      // API returns books as array of arrays: [[{...}], [{...}]]
-      const books = Array.isArray(raw.books)
-        ? raw.books.flat().map(mapRawBook)
-        : [];
+      const books = Array.isArray(raw.docs) ? raw.docs.map(mapRawSearchBook) : [];
+
       return {
         data: books,
-        total: raw.available ?? books.length,
+        total: raw.numFound ?? books.length,
         page,
-      } as PaginatedResponse<Book>;
+      } satisfies PaginatedResponse<Book>;
     },
     () => makeFallbackSearchResponse(),
   );
 }
 
 /**
- * Fetch a single book's full details by ID.
+ * Fetch a single book's full details by work ID (e.g. "OL82563W").
  */
 export async function getBook(id: string): Promise<BookDetail> {
   const key = detailCacheKey(id);
@@ -323,8 +298,18 @@ export async function getBook(id: string): Promise<BookDetail> {
   return throttledRequest(
     key,
     async () => {
-      const response = await apiClient.get<RawBookDetail>(`/${id}`);
-      return mapDetail(response.data);
+      const response = await apiClient.get<RawWorkDetail>(
+        `/works/${id}.json`,
+      );
+      const raw = response.data;
+      const detail = mapRawDetail(raw, id);
+
+      // Resolve first author name via author API
+      if (raw.authors && raw.authors.length > 0) {
+        detail.author = await resolveAuthorName(raw.authors[0]!.author.key);
+      }
+
+      return detail;
     },
     () => makeFallbackDetail(id),
   );
@@ -332,6 +317,7 @@ export async function getBook(id: string): Promise<BookDetail> {
 
 /**
  * Fetch similar books for a given book ID. Returns up to 5 books.
+ * Searches by the same author name and/or subject.
  */
 export async function getSimilarBooks(id: string): Promise<Book[]> {
   const key = similarCacheKey(id);
@@ -339,49 +325,73 @@ export async function getSimilarBooks(id: string): Promise<Book[]> {
   return throttledRequest(
     key,
     async () => {
-      const response = await apiClient.get<RawSimilarResponse>(`/${id}/similar`);
-      const raw = response.data;
-      // Similar endpoint uses "similar_books" (not "books")
-      const books = Array.isArray(raw.similar_books)
-        ? raw.similar_books.slice(0, 5).map(mapRawSimilar)
-        : [];
-      return books;
+      // 1. Get work detail to extract author and subject
+      const detailResp = await apiClient.get<RawWorkDetail>(
+        `/works/${id}.json`,
+      );
+      const detail = detailResp.data;
+
+      // 2. Resolve author name (may fail gracefully)
+      let authorName = '';
+      if (detail.authors && detail.authors.length > 0) {
+        authorName = await resolveAuthorName(detail.authors[0]!.author.key);
+      }
+
+      // 3. Search by author name and/or first subject
+      const queryParams: Record<string, string | number> = {
+        limit: 5,
+        fields:
+          'key,title,author_name,cover_i,first_publish_year,subject,ratings_average,number_of_pages_median',
+      };
+
+      if (authorName && authorName !== 'Unknown Author') {
+        queryParams['q'] = authorName;
+      }
+
+      // Also add first real subject as additional filter
+      const firstSubject = extractGenres(detail.subjects)[0];
+      if (firstSubject) {
+        queryParams['subject'] = firstSubject;
+      }
+
+      const searchResp = await apiClient.get<RawSearchResponse>(
+        '/search.json',
+        { params: queryParams },
+      );
+
+      const docs = searchResp.data.docs || [];
+      return docs
+        .map(mapRawSearchBook)
+        .filter((b) => b.id !== id)
+        .slice(0, 5);
     },
     () => [],
   );
 }
 
 /**
- * Search authors by name. Returns minimal book entries that represent the author.
+ * Search authors by name. Returns up to 10 results.
  */
-export async function searchAuthors(name: string): Promise<{ id: string; name: string }[]> {
+export async function searchAuthors(
+  name: string,
+): Promise<{ id: string; name: string }[]> {
   const key = `authors:${name}`;
 
   return throttledRequest(
     key,
     async () => {
-      const response = await apiClient.get<RawSearchResponse>('/search-authors', {
-        params: { name },
-      });
+      const response = await apiClient.get<RawAuthorSearchResponse>(
+        '/search/authors.json',
+        { params: { q: name, limit: 10 } },
+      );
 
-      const raw = response.data;
-      // Authors search returns book entries (array of arrays)
-      const bookEntries = Array.isArray(raw.books) ? raw.books.flat() : [];
-      if (bookEntries.length === 0) return [];
+      const docs = response.data.docs || [];
+      if (docs.length === 0) return [];
 
-      // Deduplicate authors from the results
-      const seen = new Set<string>();
-      const authors: { id: string; name: string }[] = [];
-      for (const book of bookEntries) {
-        const names = book.authors?.map((a) => a.name) ?? ['Unknown Author'];
-        for (const name of names) {
-          if (!seen.has(name)) {
-            seen.add(name);
-            authors.push({ id: String(book.id), name });
-          }
-        }
-      }
-      return authors;
+      return docs.map((doc) => ({
+        id: doc.key.replace('/authors/', ''),
+        name: doc.name,
+      }));
     },
     () => [],
   );

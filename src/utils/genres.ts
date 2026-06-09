@@ -9,7 +9,7 @@ export const GENRES: Genre[] = [
   { name: 'Science Fiction', slug: 'science_fiction' },
   { name: 'Mystery', slug: 'mystery' },
   { name: 'Romance', slug: 'romance' },
-  { name: 'Non-Fiction', slug: 'non_fiction' },
+  { name: 'Non-Fiction', slug: 'non-fiction' },
   { name: 'Biography', slug: 'biography' },
   { name: 'History', slug: 'history' },
   { name: 'Thriller', slug: 'thriller' },

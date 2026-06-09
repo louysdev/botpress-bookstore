@@ -164,20 +164,16 @@ export function useFeaturedBooks(): UseFeaturedBooksResult {
   const [books, setBooks] = useState<Book[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const fetched = useRef(false);
 
   useEffect(() => {
-    if (fetched.current) return;
-    fetched.current = true;
-
     let cancelled = false;
 
-    // Pick the first 3 non-fiction genres for featured content
+    // Pick the first 3 genres for featured content
     const popular = GENRES.slice(0, 3).map((g) => g.slug);
 
     Promise.all(
       popular.map((genre) =>
-        searchBooks({ query: genre, page: 1 }).then((r) => r.data),
+        searchBooks({ genre: genre, page: 1 }).then((r) => r.data),
       ),
     )
       .then((results) => {
